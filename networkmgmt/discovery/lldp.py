@@ -75,7 +75,7 @@ class LldpDiscovery:
                 text=True,
                 timeout=15,
             )
-        except subprocess.TimeoutExpired, FileNotFoundError:
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
 
         if result.returncode != 0 or not result.stdout.strip():
