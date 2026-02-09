@@ -1,0 +1,16 @@
+__pycache__
+*.local.*
+.venv
+.git
+.github
+.idea
+.mypy_cache
+.pytest_cache
+dist
+*.egg-info
+/tests
+*.pyc
+
+docker-config/
+**/__pycache__
+**/*.local.*
