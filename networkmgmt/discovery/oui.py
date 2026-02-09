@@ -74,7 +74,7 @@ def load_oui_db() -> dict[str, str]:
             if result.returncode != 0:
                 logger.warning(f"Failed to download OUI database: {result.stderr}")
                 return oui_db
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except subprocess.TimeoutExpired, FileNotFoundError:
             logger.warning("Could not download OUI database")
             return oui_db
 

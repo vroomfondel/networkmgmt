@@ -276,7 +276,7 @@ class NetworkTopologyScanner:
         try:
             hostname, _, _ = socket.gethostbyaddr(ip)
             return hostname
-        except (socket.herror, socket.gaierror, OSError):
+        except socket.herror, socket.gaierror, OSError:
             return ""
 
     def _nmap_scan(self, ip: str) -> list[str]:

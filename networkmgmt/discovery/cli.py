@@ -136,7 +136,7 @@ def _expand_targets(targets_str: str) -> list[str]:
                 start_s, end_s = last.split("-", 1)
                 start, end = int(start_s), int(end_s)
                 result.extend(f"{prefix}.{i}" for i in range(start, end + 1))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning(f"Invalid range target: {part}")
         else:
             result.append(part)
