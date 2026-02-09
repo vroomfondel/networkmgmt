@@ -13,7 +13,7 @@ LABEL description="networkmgmt — multi-vendor network management toolkit"
 RUN apt update && \
     apt -y full-upgrade && \
     apt -y install htop procps iputils-ping locales vim tini bind9-dnsutils \
-    curl nmap traceroute fping snmp iproute2 iproute2 net-tools ipset && \
+    curl nmap traceroute fping snmp iproute2 net-tools ipset && \
     pip install --upgrade pip && \
     rm -rf /var/lib/apt/lists/*
 

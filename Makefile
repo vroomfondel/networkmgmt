@@ -29,6 +29,7 @@ venv: .venv/touchfile
 		test -d .venv || python3.14 -m venv .venv; \
 		source .venv/bin/activate; \
 		pip install -r requirements-build.txt; \
+		pip install -e .; \
 		touch .venv/touchfile; \
 	else \
 		echo "Skipping venv setup because GITHUB_RUN_ID is set"; \
