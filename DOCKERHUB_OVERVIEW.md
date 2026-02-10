@@ -3,6 +3,7 @@
 [![BuildAndPushMultiarch](https://github.com/vroomfondel/networkmgmt/actions/workflows/buildmultiarchandpush.yml/badge.svg)](https://github.com/vroomfondel/networkmgmt/actions/workflows/buildmultiarchandpush.yml)
 ![Cumulative Clones](https://img.shields.io/endpoint?logo=github&url=https://gist.githubusercontent.com/vroomfondel/906f5c4deb7e6e6bcd6ee0f7c96f586c/raw/networkmgmt_clone_count.json)
 [![PyPI](https://img.shields.io/pypi/v/networkmgmt?logo=python&logoColor=white)](https://pypi.org/project/networkmgmt/)
+[![Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png](https://raw.githubusercontent.com/vroomfondel/networkmgmt/main/Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png)](https://github.com/vroomfondel/networkmgmt)
 
 # WIP !!!
 
