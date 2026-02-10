@@ -5,7 +5,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/xomoxcc/networkmgmt?logo=docker)](https://hub.docker.com/r/xomoxcc/networkmgmt/tags)
 [![PyPI](https://img.shields.io/pypi/v/networkmgmt?logo=python&logoColor=white)](https://pypi.org/project/networkmgmt/)
 
-[![Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png](Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png)](https://hub.docker.com/r/xomoxcc/networkmgmt/tags)
+[![Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png](https://raw.githubusercontent.com/vroomfondel/networkmgmt/main/Gemini_Generated_Image_8bu6gi8bu6gi8bu6_250x250.png)](https://hub.docker.com/r/xomoxcc/networkmgmt/tags)
 
 # WIP !!!
 
