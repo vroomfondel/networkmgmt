@@ -4,7 +4,7 @@ Provides programmatic management of network switches from multiple vendors
 (QNAP, MikroTik, Netgear) using a unified API.
 """
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 import os
 import sys
