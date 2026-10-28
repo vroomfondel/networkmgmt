@@ -62,9 +62,14 @@ Issues = "https://github.com/vroomfondel/networkmgmt"
 [tool.hatch.version]
 path = "networkmgmt/__init__.py"
 
+[tool.black]
+line-length = 120
+extend-exclude = "^/ansible/"
+
 [tool.isort]
 profile = "black"
 line_length = 120
+extend_skip_glob = ["ansible/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -81,6 +86,7 @@ disallow_incomplete_defs = true
 disallow_untyped_defs = true
 no_implicit_optional = true
 exclude = [
+    "^ansible/",
     "\\.venv",
     "tests",
     "venv",

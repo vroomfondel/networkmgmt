@@ -1,0 +1,31 @@
+---
+# ansible-playbook -i examples/inventory.yml examples/qnap_switches.yml [--limit qsw-m408] [--tags qnap_vlan]
+- name: QNAP QSW switches (QSS firmware)
+  hosts: qnap_switches
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Gather switch facts
+      qnap_qsw_facts:
+        host: "{{ ansible_host }}"
+        username: "{{ qnap_user | default('admin') }}"
+        password: "{{ qnap_password }}"
+      tags: [qnap_facts]
+
+    - name: Show switch facts
+      ansible.builtin.debug:
+        var: qnap
+      tags: [qnap_facts]
+
+    - name: Reconcile VLAN membership
+      qnap_qsw_vlan:
+        host: "{{ ansible_host }}"
+        username: "{{ qnap_user | default('admin') }}"
+        password: "{{ qnap_password }}"
+        vlans: "{{ qnap_qsw_vlans }}"
+        ports: "{{ qnap_qsw_ports | default({}) }}"
+        protect_ports: "{{ qnap_qsw_protect_ports | default([]) }}"
+      when: qnap_qsw_vlans is defined
+      tags: [qnap_vlan]

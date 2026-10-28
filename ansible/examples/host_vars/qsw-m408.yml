@@ -1,0 +1,12 @@
+---
+qnap_qsw_vlans: [1, 101, 102, 150]
+
+# port the controller reaches the switch on
+qnap_qsw_protect_ports: ["11"]
+
+qnap_qsw_ports:
+  "1": {untagged: 1, tagged: [101, 102, 150]}
+  "2": {tagged: [101, 102, 150]}
+  "3": {tagged: [101, 102, 150]}   # downlink to gs305e-desk port 1
+  "7": {untagged: 101, tagged: [102, 150]}
+  "11": {untagged: 1, tagged: [101, 102, 150]}

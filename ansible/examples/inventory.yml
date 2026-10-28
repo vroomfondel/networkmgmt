@@ -1,0 +1,52 @@
+---
+switches:
+  children:
+    netgear_switches:
+    qnap_switches:
+
+netgear_switches:
+  children:
+    netgear_plus_switches:
+    netgear_pro_switches:
+
+netgear_plus_switches:
+  children:
+    netgear_gs305e:
+
+netgear_pro_switches:
+  children:
+    netgear_gs108t:
+    netgear_s3300:
+
+netgear_gs305e:
+  hosts:
+    gs305e-desk:
+      ansible_host: 192.0.2.19
+      netgear_password: "{{ lookup('env', 'GS305E_DESK_PASSWORD') }}"
+
+netgear_gs108t:
+  hosts:
+    gs108t-living-room:
+      ansible_host: 192.0.2.150
+      netgear_password: "{{ lookup('env', 'GS108T_PASSWORD') }}"
+
+netgear_s3300:
+  hosts:
+    s3300-stack:
+      ansible_host: 192.0.2.38
+      netgear_password: "{{ lookup('env', 'S3300_WEB_PASSWORD') }}"
+      netgear_snmp_user: snmpadmin
+      netgear_snmp_auth_key: "{{ lookup('env', 'S3300_SNMP_AUTH_KEY') }}"
+      netgear_snmp_priv_key: "{{ lookup('env', 'S3300_SNMP_PRIV_KEY') }}"
+      netgear_snmp_priv: true
+
+qnap_switches:
+  children:
+    qnap_qsw_m408:
+
+qnap_qsw_m408:
+  hosts:
+    qsw-m408:
+      ansible_host: 198.51.100.49
+      qnap_user: admin
+      qnap_password: "{{ lookup('env', 'QSW_PASSWORD') }}"

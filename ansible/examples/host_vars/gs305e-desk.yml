@@ -1,0 +1,9 @@
+---
+netgear_vlans: [1, 101, 102, 150]
+
+netgear_ports:
+  1: {untagged: 1, tagged: [101, 102]}   # uplink to qsw-m408 port 3
+  2: {untagged: 101}
+  3: {untagged: 150}
+  4: {untagged: 101}
+  5: {untagged: 101}

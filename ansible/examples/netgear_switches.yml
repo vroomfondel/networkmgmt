@@ -1,0 +1,127 @@
+---
+# ansible-playbook -i examples/inventory.yml examples/netgear_switches.yml [--limit gs305e-desk] [--tags netgear_vlan] [-e netgear_save=false]
+- name: Netgear Smart Managed Plus switches
+  hosts: netgear_plus_switches
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Gather switch facts
+      netgear_plus_facts:
+        host: "{{ ansible_host }}"
+        password: "{{ netgear_password }}"
+      tags: [netgear_facts]
+
+    - name: Show switch facts
+      ansible.builtin.debug:
+        var: netgear
+      tags: [netgear_facts]
+
+    - name: Reconcile VLAN membership and PVIDs
+      netgear_plus_vlan:
+        host: "{{ ansible_host }}"
+        password: "{{ netgear_password }}"
+        vlans: "{{ netgear_vlans }}"
+        ports: "{{ netgear_ports | default({}) }}"
+      when: netgear_vlans is defined
+      tags: [netgear_vlan]
+
+- name: Netgear Smart Managed Pro switches (SNMP)
+  hosts: netgear_pro_switches
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Gather stack facts
+      netgear_pro_facts:
+        host: "{{ ansible_host }}"
+        snmp_user: "{{ netgear_snmp_user }}"
+        auth_key: "{{ netgear_snmp_auth_key }}"
+        priv_key: "{{ netgear_snmp_priv_key if netgear_snmp_priv | default(false) else omit }}"
+        auth_protocol: "{{ netgear_snmp_auth_protocol | default(omit) }}"
+        priv_protocol: "{{ netgear_snmp_priv_protocol | default(omit) }}"
+      tags: [netgear_facts, netgear_stack]
+
+    - name: Show stack facts
+      ansible.builtin.debug:
+        var: netgear_pro
+      tags: [netgear_facts]
+
+    - name: Check stack links
+      vars:
+        declared: "{{ (netgear_pro_stack_links.keys() | list) + (netgear_pro_stack_links.values() | list) }}"
+        running: "{{ netgear_pro.stack_ports | dict2items | selectattr('value.running_mode', '==', 'stack') | map(attribute='key') | list }}"
+        links: "{{ declared | map('extract', netgear_pro.stack_ports) | list }}"
+      ansible.builtin.assert:
+        that:
+          - running | sort == declared | sort
+          - links | rejectattr('link') | list | length == 0
+          - links | rejectattr('errors', '==', 0) | list | length == 0
+          - netgear_pro.stack_ports.values() | map(attribute='configured_mode') | list == netgear_pro.stack_ports.values() | map(attribute='running_mode') | list
+        fail_msg: "stack ports: {{ netgear_pro.stack_ports | dict2items | selectattr('key', 'in', declared + running) | items2dict }}"
+        quiet: true
+      when: netgear_pro_stack_links is defined
+      tags: [netgear_facts, netgear_stack]
+
+    - name: Management address
+      netgear_pro_mgmt:
+        host: "{{ ansible_host }}"
+        snmp_user: "{{ netgear_snmp_user }}"
+        auth_key: "{{ netgear_snmp_auth_key }}"
+        priv_key: "{{ netgear_snmp_priv_key if netgear_snmp_priv | default(false) else omit }}"
+        auth_protocol: "{{ netgear_snmp_auth_protocol | default(omit) }}"
+        priv_protocol: "{{ netgear_snmp_priv_protocol | default(omit) }}"
+        address: "{{ netgear_pro_mgmt.address }}"
+        gateway: "{{ netgear_pro_mgmt.gateway | default('0.0.0.0') }}"
+      when: netgear_pro_mgmt is defined
+      notify: Save Netgear Pro config
+      # before routing: a routing interface in the management subnet is rejected
+      tags: [netgear_mgmt, netgear_routing]
+
+    - name: Reconcile stack VLANs, membership and PVIDs
+      netgear_pro_vlan:
+        host: "{{ ansible_host }}"
+        snmp_user: "{{ netgear_snmp_user }}"
+        auth_key: "{{ netgear_snmp_auth_key }}"
+        priv_key: "{{ netgear_snmp_priv_key if netgear_snmp_priv | default(false) else omit }}"
+        auth_protocol: "{{ netgear_snmp_auth_protocol | default(omit) }}"
+        priv_protocol: "{{ netgear_snmp_priv_protocol | default(omit) }}"
+        vlans: "{{ netgear_pro_vlans }}"
+        ports: "{{ netgear_pro_ports | default({}) }}"
+        purge_vlans: "{{ netgear_pro_purge_vlans | default(false) | bool }}"
+      when: netgear_pro_vlans is defined
+      notify: Save Netgear Pro config
+      tags: [netgear_vlan]
+
+    - name: Reconcile stack VLAN routing and static routes
+      netgear_pro_routing:
+        host: "{{ ansible_host }}"
+        snmp_user: "{{ netgear_snmp_user }}"
+        auth_key: "{{ netgear_snmp_auth_key }}"
+        priv_key: "{{ netgear_snmp_priv_key if netgear_snmp_priv | default(false) else omit }}"
+        auth_protocol: "{{ netgear_snmp_auth_protocol | default(omit) }}"
+        priv_protocol: "{{ netgear_snmp_priv_protocol | default(omit) }}"
+        password: "{{ netgear_password | default(omit) }}"
+        enabled: "{{ netgear_pro_routing.enabled | default(true) }}"
+        interfaces: "{{ netgear_pro_routing.interfaces | default({}) }}"
+        static_routes: "{{ netgear_pro_routing.static_routes | default([]) }}"
+        purge_interfaces: "{{ netgear_pro_routing.purge_interfaces | default(false) | bool }}"
+        purge_static_routes: "{{ netgear_pro_routing.purge_static_routes | default(false) | bool }}"
+        web_wait: "{{ netgear_pro_routing.web_wait | default(omit) }}"
+        web_soft_timeout: "{{ netgear_pro_routing.web_soft_timeout | default(omit) }}"
+      when: netgear_pro_routing is defined
+      notify: Save Netgear Pro config
+      tags: [netgear_routing]
+
+  handlers:
+    - name: Save Netgear Pro config
+      netgear_pro_save:
+        host: "{{ ansible_host }}"
+        snmp_user: "{{ netgear_snmp_user }}"
+        auth_key: "{{ netgear_snmp_auth_key }}"
+        priv_key: "{{ netgear_snmp_priv_key if netgear_snmp_priv | default(false) else omit }}"
+        auth_protocol: "{{ netgear_snmp_auth_protocol | default(omit) }}"
+        priv_protocol: "{{ netgear_snmp_priv_protocol | default(omit) }}"
+      when: netgear_save | default(true) | bool

@@ -1,0 +1,35 @@
+---
+netgear_pro_vlans:
+  1: "Default"
+  101: "servers"
+  102: "iot"
+  150: "guest"
+
+# never written, only checked (tag netgear_stack)
+netgear_pro_stack_links:
+  "1/xg25": "2/xg25"
+  "1/xg27": "3/xg51"
+
+# must differ from every routing interface subnet; management VLAN stays 1
+netgear_pro_mgmt:
+  address: 198.51.100.38/24
+  gateway: 0.0.0.0
+
+netgear_pro_routing:
+  enabled: true
+  interfaces:
+    1: {address: 192.0.2.38/24}
+    101: {address: 203.0.113.38/24}
+  static_routes:
+    - {dest: 0.0.0.0/0, next_hop: 203.0.113.1, description: upstream}
+  purge_interfaces: true
+  web_soft_timeout: 2
+
+netgear_pro_ports:
+  "1/g1": {pvid: 101, untagged: [101]}
+  "1/g2": {pvid: 101, untagged: [101]}
+  "1/g3": {pvid: 102, untagged: [102]}
+  # "1/xg25": stack link, not managed
+  "1/xg26": {pvid: 1, untagged: [1], tagged: [101, 102]}
+  "2/g1": {pvid: 101, untagged: [101]}
+  "2/g2": {pvid: 101, untagged: [1, 101], tagged: [102, 150]}

@@ -1,0 +1,23 @@
+---
+# SNMPv3 user is the web login; the GS108T supports only MD5/SHA and DES
+netgear_snmp_user: admin
+netgear_snmp_auth_key: "{{ netgear_password }}"
+netgear_snmp_auth_protocol: sha
+netgear_snmp_priv: true
+netgear_snmp_priv_protocol: des
+netgear_snmp_priv_key: "{{ lookup('env', 'GS108T_PRIV_KEY') }}"
+
+netgear_pro_vlans:
+  1: "Default"
+  2: "Voice VLAN"
+  3: "Auto-Video"
+
+netgear_pro_ports:
+  "g1": {pvid: 1, untagged: [1]}
+  "g2": {pvid: 1, untagged: [1]}   # uplink to s3300-stack 2/g6
+  "g3": {pvid: 1, untagged: [1]}
+  "g4": {pvid: 1, untagged: [1]}
+  "g5": {pvid: 1, untagged: [1]}
+  "g6": {pvid: 1, untagged: [1]}
+  "g7": {pvid: 1, untagged: [1]}
+  "g8": {pvid: 1, untagged: [1]}
