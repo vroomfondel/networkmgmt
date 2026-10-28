@@ -1,4 +1,4 @@
-"""Netgear switch vendor implementation (stub)."""
+"""Netgear Smart Managed Pro / FASTPATH switch vendor implementation (SNMP)."""
 
 from networkmgmt.switchctrl.vendors.netgear.client import NetgearSwitch
 
