@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
+import shutil
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,7 +14,11 @@ from networkmgmt.switchctrl.models.port import PortStatus
 from networkmgmt.switchctrl.models.system import SensorData, SystemInfo
 from networkmgmt.switchctrl.vendors.qnap.client import QNAPSwitch
 from networkmgmt.switchctrl.vendors.qnap.rest import QNAPMonitoringManager, QNAPRESTTransport
-from networkmgmt.switchctrl.vendors.qnap.utils import generate_enable_password
+from networkmgmt.switchctrl.vendors.qnap.utils import (  # gitleaks:allow
+    clean_serial,
+    generate_enable_password,
+    sha512_crypt,
+)
 
 # ── generate_enable_password utility ───────────────────────────────────
 
@@ -21,33 +26,35 @@ from networkmgmt.switchctrl.vendors.qnap.utils import generate_enable_password
 class TestGenerateEnablePassword:
     """Test generate_enable_password function."""
 
-    def test_known_serial(self):
-        """Generate password from known serial returns deterministic hash."""
-        serial = "TEST123"
-        expected = hashlib.sha512(serial.encode()).hexdigest()[-8:]
+    KNOWN_HASH = "wWc0vycfhA.9Uqeyy4e7Ez7PhfbiERTcVF3hAhNY5N3nVWqy1rU6/osByoGK8YNn6l6BwYyJ6suLNewSQCFaQ0"
 
-        result = generate_enable_password(serial)
+    def test_known_vector(self):
+        """Result is the sha512-crypt hash (salt qNaPQsw) wrapped in dollar signs."""
+        assert generate_enable_password("Q12AB34567") == f"${self.KNOWN_HASH}$"
 
-        assert result == expected
-        assert len(result) == 8
-        # Verify it's hex
-        assert all(c in "0123456789abcdef" for c in result)
+    @pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl not installed")
+    @pytest.mark.parametrize("serial", ["Q12AB34567", "A", "x" * 63, "y" * 64, "z" * 65])
+    def test_matches_openssl_sha512_crypt(self, serial):
+        out = subprocess.run(
+            ["openssl", "passwd", "-6", "-salt", "qNaPQsw", "-stdin"],
+            input=serial,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert sha512_crypt(serial.encode(), b"qNaPQsw") == out
 
-    def test_same_input_same_output(self):
-        """Same serial number produces same password."""
-        serial = "ABC123XYZ"
-        result1 = generate_enable_password(serial)
-        result2 = generate_enable_password(serial)
+    def test_garbage_suffix_is_dropped(self):
+        """U+FFFD garbage after the serial does not change the password."""
+        assert generate_enable_password("Q12AB34567\ufffd\ufffd\ufffd2@") == generate_enable_password("Q12AB34567")
 
-        assert result1 == result2
+    def test_clean_serial(self):
+        assert clean_serial("Q12AB34567\ufffd2@") == "Q12AB34567"
+        assert clean_serial("\ufffd") == ""
 
-    def test_always_8_characters(self):
-        """Generated password is always 8 characters."""
-        test_serials = ["SHORT", "VERYLONGSERIAL123456789", "X", "1234567890"]
-
-        for serial in test_serials:
-            result = generate_enable_password(serial)
-            assert len(result) == 8
+    def test_empty_serial_raises(self):
+        with pytest.raises(ValueError):
+            generate_enable_password("\ufffd\ufffd")
 
 
 # ── QNAPRESTTransport ──────────────────────────────────────────────────

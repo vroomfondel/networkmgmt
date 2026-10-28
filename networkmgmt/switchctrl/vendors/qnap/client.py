@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Self
+from typing import Literal
 
 from networkmgmt.switchctrl.base.client import BaseSwitchClient
 from networkmgmt.switchctrl.base.managers import (
@@ -19,8 +19,9 @@ from networkmgmt.switchctrl.vendors.common.cisco_managers import (
     CiscoPortManager,
     CiscoVLANManager,
 )
-from networkmgmt.switchctrl.vendors.qnap.rest import QNAPMonitoringManager, QNAPRESTTransport
+from networkmgmt.switchctrl.vendors.qnap.rest import DEFAULT_DELAY, QNAPMonitoringManager, QNAPRESTTransport
 from networkmgmt.switchctrl.vendors.qnap.utils import generate_enable_password
+from networkmgmt.switchctrl.vendors.qnap.vlan_rest import QNAPRESTVLANManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,15 @@ logger = logging.getLogger(__name__)
 class QNAPSwitch(BaseSwitchClient):
     """High-level client for QNAP QSW-M408 switch management.
 
-    Uses REST API for monitoring and SSH CLI for configuration.
+    Uses REST API for monitoring and, by default, VLAN configuration. Port and LACP
+    configuration use the SSH CLI. REST requests are serialised with ``rest_delay``
+    seconds between them (the switch backend crashes on request bursts).
+
+    VLAN backend (``vlan_backend``): ``"rest"``, ``"ssh"`` or ``None`` (auto). Auto
+    selects SSH if any of ``ssh_username``, ``ssh_password`` or ``enable_password`` is given,
+    else REST. SSH needs ``ssh enable`` on the switch (dropbear, ``ssh-rsa`` only);
+    ``guest``/``guest123`` is not accepted on every firmware, ``debug`` with the enable
+    password opens a root shell instead of the Cisco-style CLI.
 
     Usage::
 
@@ -38,9 +47,13 @@ class QNAPSwitch(BaseSwitchClient):
             info = switch.monitoring.get_system_info()
             print(info.model, info.firmware_version)
 
-            # Configuration (SSH) - requires enable mode
-            switch.enable()
-            switch.vlan.create_vlan(100, "servers")
+            # VLAN (REST by default)
+            switch.vlan.assign_port_to_vlan("3", 100, tagged=True)
+
+            # Declarative reconcile with diff
+            result = switch.rest_vlan.apply_port_membership(
+                [1, 100], {"3": PortMembership(tagged=[100])}, protect_ports=["11"]
+            )
     """
 
     def __init__(
@@ -48,15 +61,21 @@ class QNAPSwitch(BaseSwitchClient):
         host: str,
         password: str,
         username: str = "admin",
-        ssh_username: str = "guest",
-        ssh_password: str = "guest123",
+        ssh_username: str | None = None,
+        ssh_password: str | None = None,
         rest_port: int = 443,
         ssh_port: int = 22,
         verify_ssl: bool = False,
         enable_password: str | None = None,
+        vlan_backend: Literal["rest", "ssh"] | None = None,
+        rest_delay: float = DEFAULT_DELAY,
     ):
         super().__init__(host)
         self._enable_password = enable_password
+        if vlan_backend is None:
+            ssh_given = ssh_username is not None or ssh_password is not None or enable_password is not None
+            vlan_backend = "ssh" if ssh_given else "rest"
+        self._vlan_backend: Literal["rest", "ssh"] = vlan_backend
 
         # REST transport for monitoring
         self._rest = QNAPRESTTransport(
@@ -65,20 +84,22 @@ class QNAPSwitch(BaseSwitchClient):
             username=username,
             port=rest_port,
             verify_ssl=verify_ssl,
+            delay=rest_delay,
         )
 
         # SSH transport for configuration (Cisco-style CLI)
         self._ssh = CiscoCLITransport(
             host=host,
-            username=ssh_username,
-            password=ssh_password,
+            username=ssh_username or "guest",
+            password=ssh_password or "guest123",
             port=ssh_port,
             enable_password=enable_password,
         )
 
         # Lazy-initialized managers
         self._monitoring: QNAPMonitoringManager | None = None
-        self._vlan: CiscoVLANManager | None = None
+        self._vlan: BaseVLANManager | None = None
+        self._rest_vlan: QNAPRESTVLANManager | None = None
         self._port: CiscoPortManager | None = None
         self._lacp: CiscoLACPManager | None = None
 
@@ -96,11 +117,26 @@ class QNAPSwitch(BaseSwitchClient):
 
     @property
     def vlan(self) -> BaseVLANManager:
-        """Access VLAN management (SSH CLI)."""
+        """Access VLAN management (REST API or SSH CLI, see ``vlan_backend``)."""
         if self._vlan is None:
-            self._ensure_ssh()
-            self._vlan = CiscoVLANManager(self._ssh)
+            if self._vlan_backend == "rest":
+                self._vlan = self.rest_vlan
+            else:
+                self._ensure_ssh()
+                self._vlan = CiscoVLANManager(self._ssh)
         return self._vlan
+
+    @property
+    def rest_vlan(self) -> QNAPRESTVLANManager:
+        """Access the REST VLAN manager including ``apply_port_membership``.
+
+        Connects REST transport on first access if not yet connected.
+        """
+        if self._rest_vlan is None:
+            if not self._rest.is_connected():
+                self._rest.connect()
+            self._rest_vlan = QNAPRESTVLANManager(self._rest)
+        return self._rest_vlan
 
     @property
     def port(self) -> BasePortManager:
@@ -155,6 +191,7 @@ class QNAPSwitch(BaseSwitchClient):
         """Disconnect both transports."""
         self._monitoring = None
         self._vlan = None
+        self._rest_vlan = None
         self._port = None
         self._lacp = None
 

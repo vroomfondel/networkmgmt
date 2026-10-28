@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any
+import time
+from collections.abc import Sequence
+from typing import Any, TypedDict
 
 import requests
 
@@ -19,12 +21,75 @@ logger = logging.getLogger(__name__)
 
 API_PATH_V1 = "api/v1"
 
+DEFAULT_DELAY = 0.3
+DEFAULT_TIMEOUT = 10.0
+
+DEFAULT_ENDPOINTS: tuple[str, ...] = (
+    "system/board",
+    "system/info",
+    "system/sensor",
+    "system/time",
+    "firmware/info",
+    "firmware/condition",
+    "ports/status",
+    "ports/statistics",
+    "ports/config",
+    "ports/transceiver",
+    "vlan",
+    "lacp/info",
+    "lacp/group",
+    "rstp",
+    "igmp",
+    "mirror",
+    "loopProtect/state",
+    "ip/ipv4/config",
+    "qos/mode",
+    "snmp/service",
+)
+
+BLOCKED_ENDPOINTS: frozenset[str] = frozenset({"lldp/neighbors/status"})
+
+
+class QNAPNonJSONError(APIError):
+    """The endpoint answered without a JSON body (ip/ipv4/config, ports/config, loopProtect/state on QSW-M408)."""
+
+
+class QNAPBlockedEndpointError(APIError):
+    """The endpoint is known to time out and is suspected of killing the switch backend."""
+
+
+class QNAPFacts(TypedDict):
+    """Result of :meth:`QNAPMonitoringManager.get_facts`."""
+
+    facts: dict[str, Any]
+    unavailable: dict[str, str]
+
+
+def normalize_endpoint(endpoint: str) -> str:
+    """Strip slashes and the ``api/v1`` prefix from an endpoint path.
+
+    Args:
+        endpoint: Endpoint such as ``"api/v1/vlan"`` or ``"/vlan/"``.
+
+    Returns:
+        The path relative to ``/api/v1``.
+    """
+    path = endpoint.strip("/")
+    prefix = f"{API_PATH_V1}/"
+    return path[len(prefix) :] if path.startswith(prefix) else path
+
 
 class QNAPRESTTransport(BaseTransport):
     """HTTP REST transport using Bearer token authentication.
 
     The QNAP QSW REST API requires login via POST with a Base64-encoded
     password. The response contains a Bearer token used for subsequent requests.
+
+    Every request is serialised and spaced by ``delay`` seconds. The switch backend
+    (``aricent-backend.arm``) forks ``/bin/ubus`` per API call; request bursts end in
+    ``fork/exec /bin/ubus: cannot allocate memory`` and take down the web UI and ``/api/v1``
+    (switching keeps running). Failed requests are never retried. On the switch the fix is
+    ``vm.overcommit_memory=1`` in ``/etc/sysctl.conf`` (a firmware update resets it).
     """
 
     def __init__(
@@ -34,9 +99,14 @@ class QNAPRESTTransport(BaseTransport):
         username: str = "admin",
         port: int = 443,
         verify_ssl: bool = False,
+        delay: float = DEFAULT_DELAY,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         super().__init__(host, username, password, port)
         self.verify_ssl = verify_ssl
+        self.delay = delay
+        self.timeout = timeout
+        self._last_request: float | None = None
         self.base_url = f"https://{host}:{port}"
         self._session: requests.Session | None = None
         self._token: str | None = None
@@ -50,12 +120,18 @@ class QNAPRESTTransport(BaseTransport):
         url = f"{self.base_url}/{API_PATH_V1}/users/login"
 
         try:
-            resp = self._session.post(url, json={"username": self.username, "password": encoded_pw})
+            self._pace()
+            resp = self._session.post(
+                url, json={"username": self.username, "password": encoded_pw}, timeout=self.timeout
+            )
             resp.raise_for_status()
         except requests.RequestException as e:
             raise AuthenticationError(f"REST login failed: {e}") from e
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise AuthenticationError("REST login returned no JSON") from e
         token = data.get("result")
         if not token:
             raise AuthenticationError("REST login returned no token")
@@ -68,7 +144,8 @@ class QNAPRESTTransport(BaseTransport):
         """Logout and close the REST session."""
         if self._session and self._token:
             try:
-                self._session.post(f"{self.base_url}/{API_PATH_V1}/users/exit")
+                self._pace()
+                self._session.post(f"{self.base_url}/{API_PATH_V1}/users/exit", json={}, timeout=self.timeout)
             except requests.RequestException:
                 logger.debug("REST logout request failed (ignored)")
             self._token = None
@@ -80,25 +157,27 @@ class QNAPRESTTransport(BaseTransport):
         """Check if REST session has a valid token."""
         return self._session is not None and self._token is not None
 
-    def get(self, endpoint: str) -> dict[str, Any]:
+    def get(self, endpoint: str, allow_blocked: bool = False) -> dict[str, Any]:
         """Send a GET request to the API.
 
         Args:
             endpoint: Path relative to base URL (e.g. "api/v1/ports/status").
+            allow_blocked: Permit endpoints in ``BLOCKED_ENDPOINTS`` (logs a warning).
 
         Returns:
             Parsed JSON response as dict.
-        """
-        self._ensure_connected()
-        assert self._session is not None
-        url = f"{self.base_url}/{endpoint}"
-        try:
-            resp = self._session.get(url)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise APIError(f"GET {endpoint} failed: {e}") from e
 
-        return resp.json()
+        Raises:
+            QNAPBlockedEndpointError: Endpoint is blocked and ``allow_blocked`` is false.
+            QNAPNonJSONError: The endpoint answered without JSON.
+            APIError: Transport failure or ``error_code`` other than 200.
+        """
+        path = normalize_endpoint(endpoint)
+        if path in BLOCKED_ENDPOINTS:
+            if not allow_blocked:
+                raise QNAPBlockedEndpointError(f"GET {path} is blocked (times out, may crash the switch backend)")
+            logger.warning("GET %s requested explicitly; it may time out and crash the switch backend", path)
+        return self._request("GET", endpoint)
 
     def post(self, endpoint: str, data: dict | None = None) -> dict[str, Any]:
         """Send a POST request to the API.
@@ -110,16 +189,65 @@ class QNAPRESTTransport(BaseTransport):
         Returns:
             Parsed JSON response as dict.
         """
+        return self._request("POST", endpoint, data)
+
+    def put(self, endpoint: str, data: dict | None = None) -> dict[str, Any]:
+        """Send a PUT request to the API.
+
+        Args:
+            endpoint: Path relative to base URL.
+            data: JSON body payload.
+
+        Returns:
+            Parsed JSON response as dict.
+        """
+        return self._request("PUT", endpoint, data)
+
+    def delete(self, endpoint: str, data: dict | None = None) -> dict[str, Any]:
+        """Send a DELETE request with a JSON body to the API.
+
+        Args:
+            endpoint: Path relative to base URL.
+            data: JSON body payload.
+
+        Returns:
+            Parsed JSON response as dict.
+        """
+        return self._request("DELETE", endpoint, data)
+
+    def _request(self, method: str, endpoint: str, data: dict | None = None) -> dict[str, Any]:
         self._ensure_connected()
         assert self._session is not None
-        url = f"{self.base_url}/{endpoint}"
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
+        if method != "GET":
+            kwargs["json"] = data or {}
+        self._pace()
         try:
-            resp = self._session.post(url, json=data or {})
+            resp = getattr(self._session, method.lower())(url, **kwargs)
             resp.raise_for_status()
         except requests.RequestException as e:
-            raise APIError(f"POST {endpoint} failed: {e}") from e
+            raise APIError(f"{method} {endpoint} failed: {e}") from e
 
-        return resp.json()
+        if not resp.content:
+            return {}
+        try:
+            body = resp.json()
+        except ValueError as e:
+            raise QNAPNonJSONError(f"{method} {endpoint}: HTTP {resp.status_code}, no JSON") from e
+        if not isinstance(body, dict):
+            raise QNAPNonJSONError(f"{method} {endpoint}: unexpected JSON type {type(body).__name__}")
+        error_code = body.get("error_code")
+        if error_code is not None and error_code != 200:
+            raise APIError(f"{method} {endpoint}: error_code {error_code}: {body.get('error_message')}")
+        return body
+
+    def _pace(self) -> None:
+        if self.delay > 0 and self._last_request is not None:
+            wait = self.delay - (time.monotonic() - self._last_request)
+            if wait > 0:
+                time.sleep(wait)
+        self._last_request = time.monotonic()
 
     def _ensure_connected(self) -> None:
         if not self.is_connected():
@@ -183,7 +311,7 @@ class QNAPMonitoringManager(BaseMonitoringManager):
         return SystemInfo(
             hostname=result.get("hostname", ""),
             mac_address=result.get("macAddr", ""),
-            serial_number=result.get("serialNum", ""),
+            serial_number=result.get("serialNum") or result.get("SerialNumber", ""),
             firmware_version=result.get("fwVer", ""),
             firmware_date=result.get("fwDate", ""),
             model=result.get("modelName", ""),
@@ -238,3 +366,29 @@ class QNAPMonitoringManager(BaseMonitoringManager):
             "info": info.get("result", {}),
             "condition": condition.get("result", {}),
         }
+
+    def get_facts(self, endpoints: Sequence[str] | None = None, include_lldp: bool = False) -> QNAPFacts:
+        """Read a list of endpoints serially, collecting failures instead of aborting.
+
+        Args:
+            endpoints: Paths relative to ``/api/v1``. Defaults to ``DEFAULT_ENDPOINTS``.
+            include_lldp: Also query ``lldp/neighbors/status`` (times out, may crash the switch backend).
+
+        Returns:
+            ``facts`` maps each path (``/`` replaced by ``_``) to its ``result``; ``unavailable`` maps
+            paths that gave no JSON, an error or are blocked to the reason.
+        """
+        paths = [normalize_endpoint(e) for e in (endpoints if endpoints is not None else DEFAULT_ENDPOINTS)]
+        if include_lldp and "lldp/neighbors/status" not in paths:
+            paths.append("lldp/neighbors/status")
+
+        facts: dict[str, Any] = {}
+        unavailable: dict[str, str] = {}
+        for path in paths:
+            try:
+                body = self._transport.get(f"{API_PATH_V1}/{path}", allow_blocked=include_lldp)
+            except APIError as e:
+                unavailable[path] = str(e)
+                continue
+            facts[path.replace("/", "_")] = body.get("result")
+        return QNAPFacts(facts=facts, unavailable=unavailable)
