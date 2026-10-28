@@ -21,12 +21,13 @@ class TestListVendors:
         assert vendors == sorted(vendors)
 
     def test_list_vendors_contains_required_vendors(self):
-        """list_vendors should contain at least cisco, mikrotik, qnap, netgear."""
+        """list_vendors should contain at least cisco, mikrotik, qnap, netgear, netgear_plus."""
         vendors = list_vendors()
         assert "cisco" in vendors
         assert "mikrotik" in vendors
         assert "qnap" in vendors
         assert "netgear" in vendors
+        assert "netgear_plus" in vendors
 
 
 class TestCreateSwitch:
@@ -43,6 +44,28 @@ class TestCreateSwitch:
         )
         assert isinstance(switch, CiscoSwitch)
         assert switch.host == "10.0.0.1"
+
+    def test_create_netgear_switch_snmpv3(self):
+        """create_switch should create NetgearSwitch from SNMPv3 credentials."""
+        from networkmgmt.switchctrl.vendors.netgear import NetgearSwitch
+
+        switch = create_switch(vendor="netgear", host="10.0.0.2", snmp_user="u", auth_key="a" * 8, priv_key="p" * 8)
+        assert isinstance(switch, NetgearSwitch)
+        assert switch.host == "10.0.0.2"
+
+    def test_create_netgear_switch_community(self):
+        """create_switch should create NetgearSwitch from an SNMPv2c community."""
+        from networkmgmt.switchctrl.vendors.netgear import NetgearSwitch
+
+        assert isinstance(create_switch(vendor="netgear", host="10.0.0.2", community="public"), NetgearSwitch)
+
+    def test_create_netgear_plus_switch(self):
+        """create_switch should create NetgearPlusSwitch without touching the network."""
+        from networkmgmt.switchctrl.vendors.netgear_plus import NetgearPlusSwitch
+
+        switch = create_switch(vendor="netgear_plus", host="10.0.0.3", password="x")
+        assert isinstance(switch, NetgearPlusSwitch)
+        assert switch.host == "10.0.0.3"
 
     def test_create_switch_case_insensitive(self):
         """create_switch should be case-insensitive for vendor name."""
