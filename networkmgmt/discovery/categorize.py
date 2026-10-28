@@ -39,10 +39,7 @@ _CATEGORY_RULES: list[tuple[DeviceCategory, list[str], list[str]]] = [
             "supermicro",
             "rpi",
             "raspi",
-            "thinkcentre",
-            "acerrevo",
             "revo",
-            "peekabooboo",
         ],
     ),
     (
