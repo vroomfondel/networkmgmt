@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-Three independent subsystems under `networkmgmt/`:
+Three independent subsystems under `networkmgmt/`, plus the shared `snmp/` core and stand-alone Ansible modules in `ansible/`:
 
 ### switchctrl — Multi-Vendor Switch Management
 
@@ -43,6 +43,16 @@ Uses a **factory + registry pattern** for vendor extensibility:
 
 **Models:** Plain dataclasses in `models/` (PortConfig, VLAN, SystemInfo, etc.).
 
+**Vendors:** `cisco`, `mikrotik`, `qnap`, `netgear` (Smart Managed Pro, SNMP), `netgear_plus` (Smart Managed Plus, web UI). The CLI builds constructor kwargs per vendor (`build_kwargs` in `cli.py`); `monitor` reports and skips sections that raise `NotImplementedError`.
+
+- **netgear** (`vendors/netgear/`): `NetgearSwitch` over `networkmgmt.snmp` — SNMPv3 (`snmp_user`, `auth_key`, `auth_protocol`, `priv_key`, `priv_protocol`) or v2c (`community`); `web_password` only for static routes (`routing.py`, `web.py`, max. 4 web sessions). Writes are verified by polling the read-back (`backend.py`); VLAN SETs are one varbind per PDU; untagged port lists are patched bitwise (`portlist_patch`); factory VLANs exist only in the current table; stack links are not bridge ports. `save_config()` uses `agentSaveConfig` under `4526.11`. GS108Tv2: web login is the SNMPv3 user, `md5`/`sha` + `des` only. Sensors and LAG changes raise `NotImplementedError`.
+- **netgear_plus** (`vendors/netgear_plus/`): `NetgearPlusSwitch(host, password, timeout)` over the optional `netgear-tool` (`sdk.py` wraps it; single web session, use as context manager). `vlan.reconcile()` is declarative incl. removal; `untagged` also sets the PVID; 802.1Q must be on. LACP and sensors raise `NotImplementedError`.
+- **qnap REST VLAN** (`vendors/qnap/vlan_rest.py`): `vlan_backend` `rest` (default) or `ssh` (auto-selected when SSH/enable credentials are given); `rest_vlan.apply_port_membership()` reconciles declaratively and saves. REST requests are serialised with `rest_delay` (default 0.3 s) because the switch backend dies on bursts (fork ENOMEM); `lldp/neighbors/status` is blocked; QSS has no PVID (untagged membership is the native VLAN).
+
+### snmp — Shared SNMP Core
+
+`networkmgmt/snmp/` (credentials, session, polling, portlists, errors) is the common SNMPv2c/v3 layer. `pysnmp` is optional (extra `snmp`) and imported lazily from `pysnmp.hlapi.v3arch.asyncio`; without it, sessions raise `SnmpUnavailableError`. Used by the `netgear` vendor.
+
 ### discovery — Network Topology Discovery
 
 Pipeline-based scanner (`NetworkTopologyScanner` in `scanner.py`) that chains: ARP scan → DNS → OUI lookup → optional nmap/SNMP/LLDP/traceroute → categorization.
@@ -56,6 +66,14 @@ Pipeline-based scanner (`NetworkTopologyScanner` in `scanner.py`) that chains: A
 ### snmp_vlan_dump — SNMP VLAN Port Mapping
 
 Collects VLAN-port assignments from Netgear switches via SNMPv2c. Models use Pydantic v2. Output via terminal/markdown formatters or Mermaid diagrams.
+
+### ansible — Stand-alone Ansible Modules
+
+`ansible/` holds modules (no collection packaging) for Netgear Plus/Pro and QNAP QSW with the same hardware findings as `switchctrl`; see `ansible/README.md`.
+
+### Optional extras
+
+`snmp` (pysnmp), `netgear-plus` (netgear-tool), `discovery` (scapy), `all`. The base install has no web-framework or kubernetes dependency.
 
 ## Testing
 
