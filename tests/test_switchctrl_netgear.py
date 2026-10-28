@@ -29,6 +29,7 @@ from networkmgmt.switchctrl.vendors.netgear.web import NetgearWeb, WebError
 
 LENGTH = 2
 ALL_BITS = set(range(1, 8 * LENGTH + 1))
+CPU_PORT = 13
 NAMES = {1: "1/g1", 2: "1/g2", 3: "1/g3", 4: "1/g4", 5: "l1", 9: "1/stack1", 13: "cpu"}
 BRIDGE_PORTS = {1, 2, 3, 4, 5}
 
@@ -47,7 +48,7 @@ class FakeClock:
 
 
 class FakeSwitch(SnmpSession):
-    """In-memory GS108Tv2-like agent: delayed writes, one varbind per VLAN PDU, untagged-mask lock."""
+    """In-memory GS108Tv2-like agent: delayed writes, one varbind per VLAN PDU, CPU-bit untagged lock."""
 
     def __init__(self, delay=0, host="192.0.2.50"):
         self._host = host
@@ -180,9 +181,8 @@ class FakeSwitch(SnmpSession):
             v = self.vlans[vid]
             if vid in self.locked:
                 raise SnmpWriteError("set: commitFailed", oid=oid, status="commitFailed")
-            old = (ALL_BITS - v["egress"]) | v["untagged"]
             new = portlist_to_ports(value.value)
-            if any(i in old and i not in new and i not in v["egress"] for i in ALL_BITS):
+            if CPU_PORT not in new:
                 self.locked.add(vid)
             v["untagged"] = new & v["egress"]
             self._publish(vid)

@@ -265,7 +265,7 @@ async def _run(params, check_mode):
             cur = cur_v.get(vid, dict(egress=set(), untagged=set()))
             moved = {i for i in egress | untagged | cur["egress"] | cur["untagged"] if (i in egress, i in untagged) != (i in cur["egress"], i in cur["untagged"])}
             await s.set(("%s.%d" % (VLAN_EGRESS, vid), octets(portlist_encode(egress, length))))
-            # GS108T sets untagged bits of non-members (incl. CPU port) and refuses edits once one is cleared
+            # GS108T keeps the CPU port (bit 13) set in every untagged mask and refuses untagged edits once it is cleared
             bits = portlist_patch(raw_untagged.get(vid, b""), length, {i: i in untagged for i in moved})
             await s.set(("%s.%d" % (VLAN_UNTAGGED, vid), octets(bits)))
 

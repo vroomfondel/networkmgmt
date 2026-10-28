@@ -32,9 +32,8 @@ def ports_to_portlist(ports: set[int] | frozenset[int], length: int) -> bytes:
 def portlist_patch(octets: bytes, length: int, bits: dict[int, bool]) -> bytes:
     """Change single bits of a PortList and leave every other bit untouched.
 
-    Switches such as the GS108Tv2 keep the bits of non-members (including the CPU port) at 1 in the
-    untagged bitmap and refuse further edits once one of them was cleared, so only the bits of ports
-    that actually move may be written.
+    The GS108Tv2 keeps the CPU port (bit 13) set in every untagged bitmap and refuses further untagged
+    edits of a VLAN once that bit was cleared, so only the bits of ports that actually move may be written.
 
     Args:
         octets: Current raw bitmap; padded with zeros or truncated to ``length``.

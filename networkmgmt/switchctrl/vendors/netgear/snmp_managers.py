@@ -14,7 +14,6 @@ from networkmgmt.snmp import (
     octets,
     poll_until,
     portlist_patch,
-    portlist_to_ports,
     ports_to_portlist,
     to_switch_error,
     unsigned,
@@ -391,14 +390,9 @@ class NetgearVLANManager(BaseVLANManager):
         s.set(
             (f"{oids.VLAN_STATIC_EGRESS}.{vid}", octets(ports_to_portlist(egress, table.length))), single_varbind=True
         )
-        leaver_bit = self._nonmember_bit(table)
-        patch = {i: (i in untagged) if i in egress else leaver_bit for i in moved}
+        patch = {i: i in untagged for i in moved}
         bits = portlist_patch(cur.untagged_raw, table.length, patch)
         s.set((f"{oids.VLAN_STATIC_UNTAGGED}.{vid}", octets(bits)), single_varbind=True)
-
-    @staticmethod
-    def _nonmember_bit(table: VlanTable) -> bool:
-        return any(portlist_to_ports(v.untagged_raw) - v.egress for v in table.vlans.values())
 
     def _apply(self, table: VlanTable, targets: dict[int, tuple[set[int], set[int]]], pvids: dict[int, int]) -> None:
         cur = table.vlans

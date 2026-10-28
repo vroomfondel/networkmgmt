@@ -410,7 +410,7 @@ with create_switch("netgear_plus", host="192.168.1.5", password="secret") as swi
 - **Delayed writes** — SNMP and REST writes take effect with delay, so every write is verified by polling the read-back.
 - **One varbind per PDU** — VLAN writes on Netgear Pro are sent as single-varbind SETs; bundled varbinds are rejected with `commitFailed`.
 - **Factory VLANs** — Netgear Pro lists default VLANs only in the Q-BRIDGE current table, not in the static table.
-- **Untagged mask** — patch the Netgear Pro untagged port list bit by bit; clearing a non-member bit (CPU port) blocks every later untagged change of that VLAN.
+- **Untagged mask** — patch the Netgear Pro untagged port list bit by bit; clearing the CPU-port bit (13 on the GS108T) blocks every later untagged change of that VLAN, cleared bits of regular ports are harmless.
 - **Stack links** — Netgear Pro stack ports are not bridge ports and are rejected as VLAN members.
 - **Save** — Netgear Pro persists the config via `agentSaveConfig` under `4526.11` (not `4526.10`).
 - **Static routes** — Netgear Pro accepts them only through the web UI (SNMP writes fail with `commitFailed`), which allows at most 4 sessions.
