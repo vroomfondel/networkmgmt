@@ -89,7 +89,7 @@ pypibuild: distcheck
 
 dist/.touchfile_push: dist/networkmgmt-$(VERSION).tar.gz dist/networkmgmt-$(VERSION)-py3-none-any.whl
 	@$(venv_activated)
-	$(MAKE) distcheck
+	$(MAKE) distcheck || exit 1
 	hatch publish -r main
 	@touch dist/.touchfile_push
 
