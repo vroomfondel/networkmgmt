@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from loguru import logger
 
 from networkmgmt.discovery.mermaid import MermaidGenerator
 from networkmgmt.discovery.scanner import NetworkTopologyScanner
-from networkmgmt.discovery.snmp import HAS_PYSNMP
+from networkmgmt.discovery.snmp import HAS_PYSNMP, SwitchSpec
+from networkmgmt.snmp import AUTH_PROTOCOLS, PRIV_PROTOCOLS, SnmpCredentials
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
@@ -71,8 +73,37 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--switches",
         help="SNMP L2 discovery: comma-separated switch IPs with optional community "
-        "(e.g. 192.168.101.38:public,192.168.101.19). Default community: public",
+        "(e.g. 192.0.2.38:public,192.0.2.19). Default community: public; "
+        "entries without community use the --snmp-user credentials when given",
     )
+    snmp_group = parser.add_argument_group("SNMPv3 for --switches entries without community")
+    snmp_group.add_argument("--snmp-user", help="SNMPv3 user name")
+    snmp_group.add_argument(
+        "--snmp-auth-key",
+        default=os.environ.get("SNMP_AUTH_KEY"),
+        help="SNMPv3 authentication passphrase (default: $SNMP_AUTH_KEY)",
+    )
+    snmp_group.add_argument(
+        "--snmp-auth-protocol",
+        choices=AUTH_PROTOCOLS,
+        default="sha512",
+        help="SNMPv3 authentication protocol (default: sha512)",
+    )
+    snmp_group.add_argument(
+        "--snmp-priv-key",
+        default=os.environ.get("SNMP_PRIV_KEY"),
+        help="SNMPv3 privacy passphrase; unset means authNoPriv (default: $SNMP_PRIV_KEY)",
+    )
+    snmp_group.add_argument(
+        "--snmp-priv-protocol",
+        choices=PRIV_PROTOCOLS,
+        default="aes128",
+        help="SNMPv3 privacy protocol (default: aes128)",
+    )
+    snmp_group.add_argument(
+        "--snmp-timeout", type=float, default=5.0, help="SNMP timeout per request in s (default: 5)"
+    )
+    snmp_group.add_argument("--snmp-retries", type=int, default=1, help="SNMP retries per request (default: 1)")
     parser.add_argument(
         "--lldp-collect",
         metavar="DIR",
@@ -86,7 +117,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--topology",
         help="Manual L2 topology: comma-separated HOST_IP:SWITCH_IP:PORT_NAME entries "
-        "(e.g. 192.168.101.50:192.168.101.19:g3,192.168.101.51:192.168.101.19:g4)",
+        "(e.g. 192.0.2.50:192.0.2.19:g3,192.0.2.51:192.0.2.19:g4)",
     )
     parser.add_argument(
         "-d",
@@ -123,14 +154,14 @@ def _expand_targets(targets_str: str) -> list[str]:
         if not part:
             continue
         if "/" in part:
-            # CIDR notation: 192.168.101.0/24
+            # CIDR notation: 192.0.2.0/24
             try:
                 net = ipaddress.IPv4Network(part, strict=False)
                 result.extend(str(ip) for ip in net.hosts())
             except ValueError:
                 logger.warning(f"Invalid CIDR target: {part}")
         elif "-" in part.rsplit(".", 1)[-1]:
-            # Last-octet range: 192.168.101.1-254
+            # Last-octet range: 192.0.2.1-254
             prefix, last = part.rsplit(".", 1)
             try:
                 start_s, end_s = last.split("-", 1)
@@ -143,18 +174,33 @@ def _expand_targets(targets_str: str) -> list[str]:
     return result
 
 
-def _parse_switches(switches_str: str) -> list[tuple[str, str]]:
-    """Parse --switches argument: IP[:COMMUNITY],..."""
-    switches: list[tuple[str, str]] = []
+def _credentials_from_args(parsed: argparse.Namespace) -> SnmpCredentials | None:
+    """Build the global SNMPv3 credentials from --snmp-* options; None when --snmp-user is not set."""
+    if not parsed.snmp_user:
+        return None
+    if not parsed.snmp_auth_key:
+        raise SystemExit("error: --snmp-user requires --snmp-auth-key (or $SNMP_AUTH_KEY)")
+    return SnmpCredentials.v3(
+        parsed.snmp_user,
+        parsed.snmp_auth_key,
+        auth_protocol=parsed.snmp_auth_protocol,
+        priv_key=parsed.snmp_priv_key or None,
+        priv_protocol=parsed.snmp_priv_protocol,
+    )
+
+
+def _parse_switches(switches_str: str, default_credentials: SnmpCredentials | None = None) -> list[SwitchSpec]:
+    """Parse --switches argument: IP[:COMMUNITY],... (entries without community use ``default_credentials``)."""
+    switches: list[SwitchSpec] = []
     for part in switches_str.split(","):
         part = part.strip()
         if not part:
             continue
         if ":" in part:
             ip, community = part.split(":", 1)
+            switches.append((ip, community))
         else:
-            ip, community = part, "public"
-        switches.append((ip, community))
+            switches.append((part, default_credentials or "public"))
     return switches
 
 
@@ -188,12 +234,12 @@ def main(args: list[str] | None = None) -> None:
     interfaces = [i.strip() for i in parsed.interface.split(",") if i.strip()] if parsed.interface else []
 
     # Parse --switches
-    switches: list[tuple[str, str]] = []
+    switches: list[SwitchSpec] = []
     if parsed.switches:
         if not HAS_PYSNMP:
             logger.error("pysnmp is required for --switches (pip install pysnmp)")
             sys.exit(1)
-        switches = _parse_switches(parsed.switches)
+        switches = _parse_switches(parsed.switches, _credentials_from_args(parsed))
 
     scanner = NetworkTopologyScanner(
         interfaces=interfaces,
@@ -212,6 +258,8 @@ def main(args: list[str] | None = None) -> None:
         traceroute_targets=traceroute_targets,
         trace_local=parsed.trace_local,
         switches=switches,
+        snmp_timeout=parsed.snmp_timeout,
+        snmp_retries=parsed.snmp_retries,
         lldp_collect_dir=Path(parsed.lldp_collect) if parsed.lldp_collect else None,
         lldp_dir=Path(parsed.lldp_dir) if parsed.lldp_dir else None,
         manual_topology=manual_topology or None,

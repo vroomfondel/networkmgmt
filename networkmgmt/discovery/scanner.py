@@ -28,7 +28,7 @@ from networkmgmt.discovery.models import (
     TraceroutePath,
 )
 from networkmgmt.discovery.oui import load_oui_db, lookup_vendor
-from networkmgmt.discovery.snmp import HAS_PYSNMP, SnmpBridgeDiscovery
+from networkmgmt.discovery.snmp import HAS_PYSNMP, SnmpBridgeDiscovery, SwitchSpec
 
 # Optional scapy import
 try:
@@ -637,10 +637,12 @@ class NetworkTopologyScanner:
         self,
         traceroute_targets: list[str] | None = None,
         trace_local: bool = False,
-        switches: list[tuple[str, str]] | None = None,
+        switches: list[SwitchSpec] | None = None,
         lldp_collect_dir: Path | None = None,
         lldp_dir: Path | None = None,
         manual_topology: list[tuple[str, str, str]] | None = None,
+        snmp_timeout: float = 5.0,
+        snmp_retries: int = 1,
     ) -> NetworkTopology:
         """Orchestrate full discovery pipeline.
 
@@ -665,7 +667,7 @@ class NetworkTopologyScanner:
         switch_ips: set[str] = set()
         if switches and HAS_PYSNMP:
             switch_ips = {ip for ip, _ in switches}
-            snmp_discovery = SnmpBridgeDiscovery(switches)
+            snmp_discovery = SnmpBridgeDiscovery(switches, timeout=snmp_timeout, retries=snmp_retries)
             mac_table = snmp_discovery.discover()
             logger.info(f"SNMP: {len(mac_table)} unique MACs from {len(switches)} switch(es)")
 

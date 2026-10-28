@@ -3,11 +3,13 @@
 import pytest
 
 from networkmgmt.discovery.cli import (
+    _credentials_from_args,
     _expand_targets,
     _parse_switches,
     _parse_topology,
     parse_args,
 )
+from networkmgmt.snmp import SnmpCredentials
 
 
 class TestParseArgs:
@@ -180,3 +182,52 @@ class TestParseTopology:
         result = _parse_topology("a:b:c , d:e:f")
 
         assert result == [("a", "b", "c"), ("d", "e", "f")]
+
+
+class TestSnmpV3Options:
+    """Tests for the global SNMPv3 options of --switches."""
+
+    def test_no_user_means_no_credentials(self, monkeypatch):
+        monkeypatch.delenv("SNMP_AUTH_KEY", raising=False)
+        assert _credentials_from_args(parse_args([])) is None
+
+    def test_defaults(self):
+        creds = _credentials_from_args(parse_args(["--snmp-user", "admin", "--snmp-auth-key", "authkey12"]))
+        assert creds == SnmpCredentials.v3("admin", "authkey12")
+        assert (creds.auth_protocol, creds.priv_protocol) == ("sha512", "aes128")
+
+    def test_all_options(self):
+        parsed = parse_args(
+            [
+                "--snmp-user",
+                "u",
+                "--snmp-auth-key",
+                "authkey12",
+                "--snmp-auth-protocol",
+                "sha",
+                "--snmp-priv-key",
+                "privkey12",
+                "--snmp-priv-protocol",
+                "des",
+                "--snmp-timeout",
+                "2.5",
+                "--snmp-retries",
+                "0",
+            ]
+        )
+        creds = _credentials_from_args(parsed)
+        assert creds == SnmpCredentials.v3("u", "authkey12", "sha", "privkey12", "des")
+        assert (parsed.snmp_timeout, parsed.snmp_retries) == (2.5, 0)
+
+    def test_user_without_key_exits(self, monkeypatch):
+        monkeypatch.delenv("SNMP_AUTH_KEY", raising=False)
+        with pytest.raises(SystemExit):
+            _credentials_from_args(parse_args(["--snmp-user", "u"]))
+
+    def test_bare_ip_gets_v3_community_entry_stays_v2c(self):
+        creds = SnmpCredentials.v3("admin", "authkey12")
+        result = _parse_switches("10.0.0.1,10.0.0.2:private", creds)
+        assert result == [("10.0.0.1", creds), ("10.0.0.2", "private")]
+
+    def test_bare_ip_without_credentials_is_public(self):
+        assert _parse_switches("10.0.0.1") == [("10.0.0.1", "public")]

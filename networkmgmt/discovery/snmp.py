@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any
 
 from loguru import logger
 
@@ -12,88 +12,44 @@ from networkmgmt.discovery.models import (
     L2TopologyEntry,
     SwitchPortMapping,
 )
+from networkmgmt.snmp import (
+    HAS_PYSNMP,
+    AsyncSnmpSession,
+    SnmpAuthenticationError,
+    SnmpCredentials,
+    SnmpError,
+    SnmpTimeoutError,
+)
 
-# Optional pysnmp import
-try:
-    import asyncio
-
-    from pysnmp.hlapi.asyncio import (
-        CommunityData,
-        ContextData,
-        ObjectIdentity,
-        ObjectType,
-        SnmpEngine,
-        UdpTransportTarget,
-        bulk_walk_cmd,
-        get_cmd,
-    )
-
-    HAS_PYSNMP = True
-except ImportError:
-    HAS_PYSNMP = False
+__all__ = ["HAS_PYSNMP", "SnmpBridgeDiscovery", "SwitchSpec", "describe_snmp_error"]
 
 # BRIDGE-MIB / Q-BRIDGE-MIB OIDs for MAC forwarding table
 _OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 _OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"
-_OID_DOT1D_TP_FDB_ADDRESS = "1.3.6.1.2.1.17.4.3.1.1"
 _OID_DOT1D_TP_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"
 _OID_DOT1D_BASE_PORT_IF_INDEX = "1.3.6.1.2.1.17.1.4.1.2"
 _OID_DOT1Q_TP_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"
 
-
-async def _snmp_get_scalars(engine: Any, auth: Any, target: Any, *oids: str, host: str = "") -> list[Any]:
-    """GET one or more scalar OIDs, return list of values."""
-    tag = f" [{host}]" if host else ""
-    error_indication, error_status, _, var_binds = await get_cmd(
-        engine,
-        auth,
-        target,
-        ContextData(),
-        *[ObjectType(ObjectIdentity(oid)) for oid in oids],
-    )
-    if error_indication:
-        logger.warning(f"SNMP error{tag}: {error_indication}")
-        return [None] * len(oids)
-    if error_status:
-        logger.warning(f"SNMP error{tag}: {error_status.prettyPrint()}")
-        return [None] * len(oids)
-    return [val for _, val in var_binds]
+SwitchSpec = tuple[str, str | SnmpCredentials]
 
 
-async def _snmp_walk_table(
-    engine: Any, auth: Any, target: Any, oid: str, index_len: int = 1, host: str = ""
-) -> list[tuple[Any, Any]]:
-    """Bulk-walk an OID subtree.
+def _mac_from_octets(octets: list[str]) -> str:
+    return ":".join(f"{int(o):02x}" for o in octets)
 
-    index_len=1: return (last_index, value) tuples.
-    index_len=2: return ((idx[-2], idx[-1]), value) tuples.
-    """
-    tag = f" [{host}]" if host else ""
-    results = []
-    async for error_indication, error_status, _, var_binds in bulk_walk_cmd(
-        engine,
-        auth,
-        target,
-        ContextData(),
-        0,
-        25,
-        ObjectType(ObjectIdentity(oid)),
-        lexicographicMode=False,
-    ):
-        if error_indication:
-            logger.warning(f"SNMP walk error{tag} on {oid}: {error_indication}")
-            break
-        if error_status:
-            logger.warning(f"SNMP walk error{tag} on {oid}: {error_status.prettyPrint()}")
-            break
-        for var_bind_oid, val in var_binds:
-            idx: Any
-            if index_len == 1:
-                idx = int(var_bind_oid[-1])
-            else:
-                idx = tuple(int(var_bind_oid[-i]) for i in range(index_len, 0, -1))
-            results.append((idx, val))
-    return results
+
+def describe_snmp_error(exc: SnmpError, host: str, credentials: SnmpCredentials) -> str:
+    """Return an actionable one-line description of an SNMP failure."""
+    if isinstance(exc, SnmpAuthenticationError):
+        who = f"user {credentials.user!r}" if credentials.user else "community"
+        return f"SNMP authentication failed for {host} ({who}): {exc}"
+    if isinstance(exc, SnmpTimeoutError) and credentials.user:
+        return (
+            f"SNMP timeout from {host}: unreachable, or SNMPv3 user {credentials.user!r} / auth key / "
+            f"auth protocol ({credentials.auth_protocol}) / priv settings rejected (agents often stay silent): {exc}"
+        )
+    if isinstance(exc, SnmpTimeoutError):
+        return f"SNMP timeout from {host}: unreachable or wrong community: {exc}"
+    return f"SNMP error from {host}: {exc}"
 
 
 def _build_port_name_map(if_descrs: dict[int, str]) -> dict[int, str]:
@@ -127,135 +83,66 @@ def _build_port_name_map(if_descrs: dict[int, str]) -> dict[int, str]:
 class SnmpBridgeDiscovery:
     """Discover L2 topology by querying switch MAC forwarding tables via SNMP."""
 
-    def __init__(self, switches: list[tuple[str, str]]):
+    def __init__(self, switches: list[SwitchSpec], timeout: float = 5.0, retries: int = 1):
         """
         Args:
-            switches: List of (ip, community) tuples.
+            switches: List of (ip, community or SnmpCredentials) tuples.
+            timeout: Per-request SNMP timeout in seconds.
+            retries: SNMP retries per request.
         """
         self.switches = switches
+        self.timeout = timeout
+        self.retries = retries
 
     async def _query_switch(
         self,
         switch_ip: str,
-        community: str,
+        credentials: str | SnmpCredentials,
     ) -> dict[str, SwitchPortMapping]:
         """Query a single switch's MAC forwarding table.
 
         Returns dict {mac_address: SwitchPortMapping}.
         """
-        logger.info(f"SNMP querying switch {switch_ip} (community: {community})...")
-        engine = SnmpEngine()
-        auth = CommunityData(community)
-        target = await UdpTransportTarget.create((switch_ip, 161))
+        creds = SnmpCredentials.v2c(credentials) if isinstance(credentials, str) else credentials
+        who = f"user {creds.user}, {creds.auth_protocol}" if creds.user else f"community {creds.community}"
+        logger.info(f"SNMP querying switch {switch_ip} (SNMP {creds.version}, {who})...")
 
         result: dict[str, SwitchPortMapping] = {}
 
         try:
-            # Get system name
-            scalars = await _snmp_get_scalars(
-                engine,
-                auth,
-                target,
-                _OID_SYS_NAME,
-                host=switch_ip,
-            )
-            sys_name = str(scalars[0]) if scalars[0] is not None else ""
+            async with AsyncSnmpSession(switch_ip, creds, timeout=self.timeout, retries=self.retries) as snmp:
+                sys_name = await snmp.get(_OID_SYS_NAME)
+                port_names = _build_port_name_map({int(k): v for k, v in (await snmp.walk(_OID_IF_DESCR)).items()})
+                bridge_port_to_if = {
+                    int(bp): if_idx for bp, if_idx in (await snmp.walk_int(_OID_DOT1D_BASE_PORT_IF_INDEX)).items()
+                }
 
-            # Get ifDescr for port names
-            if_descr_rows = await _snmp_walk_table(
-                engine,
-                auth,
-                target,
-                _OID_IF_DESCR,
-                host=switch_ip,
-            )
-            if_descrs = {idx: str(val) for idx, val in if_descr_rows}
-            port_names = _build_port_name_map(if_descrs)
+                q_fdb = await snmp.walk_int(_OID_DOT1Q_TP_FDB_PORT)
+                if q_fdb:
+                    logger.info(f"  {switch_ip}: {len(q_fdb)} MAC entries via Q-BRIDGE-MIB")
+                    entries: dict[str, int] = {}
+                    for suffix, port in q_fdb.items():
+                        entries.setdefault(_mac_from_octets(suffix.split(".")[1:]), port)
+                else:
+                    fdb = await snmp.walk_int(_OID_DOT1D_TP_FDB_PORT)
+                    logger.info(f"  {switch_ip}: {len(fdb)} MAC entries via BRIDGE-MIB")
+                    entries = {_mac_from_octets(suffix.split(".")): port for suffix, port in fdb.items()}
 
-            # Get bridge port -> ifIndex mapping
-            bp_if_rows = await _snmp_walk_table(
-                engine,
-                auth,
-                target,
-                _OID_DOT1D_BASE_PORT_IF_INDEX,
-                host=switch_ip,
-            )
-            bridge_port_to_if: dict[int, int] = {int(bp): int(if_idx) for bp, if_idx in bp_if_rows}
-
-            # Try Q-BRIDGE-MIB (VLAN-aware) first: dot1qTpFdbPort
-            # Index is (vlan_id, mac_octet1, mac_octet2, ..., mac_octet6)
-            q_fdb_rows = await _snmp_walk_table(
-                engine,
-                auth,
-                target,
-                _OID_DOT1Q_TP_FDB_PORT,
-                index_len=7,
-                host=switch_ip,
-            )
-
-            if q_fdb_rows:
-                logger.info(f"  {switch_ip}: {len(q_fdb_rows)} MAC entries via Q-BRIDGE-MIB")
-                for idx, val in q_fdb_rows:
-                    # idx = (vlan_id, mac1, mac2, mac3, mac4, mac5, mac6)
-                    mac_octets = idx[1:]
-                    mac = ":".join(f"{o:02x}" for o in mac_octets)
-                    bridge_port = int(val)
-                    if bridge_port == 0:
-                        continue
-                    if_index = bridge_port_to_if.get(bridge_port, bridge_port)
-                    pname = port_names.get(if_index, f"port{if_index}")
-                    # Deduplicate: keep first occurrence
-                    if mac not in result:
-                        result[mac] = SwitchPortMapping(
-                            switch_ip=switch_ip,
-                            switch_name=sys_name,
-                            port_index=if_index,
-                            port_name=pname,
-                        )
-            else:
-                # Fallback: BRIDGE-MIB dot1dTpFdbPort
-                fdb_addr_rows = await _snmp_walk_table(
-                    engine,
-                    auth,
-                    target,
-                    _OID_DOT1D_TP_FDB_ADDRESS,
-                    index_len=6,
-                    host=switch_ip,
+            for mac, bridge_port in entries.items():
+                if bridge_port == 0:
+                    continue
+                if_index = bridge_port_to_if.get(bridge_port, bridge_port)
+                result[mac] = SwitchPortMapping(
+                    switch_ip=switch_ip,
+                    switch_name=sys_name,
+                    port_index=if_index,
+                    port_name=port_names.get(if_index, f"port{if_index}"),
                 )
-                fdb_port_rows = await _snmp_walk_table(
-                    engine,
-                    auth,
-                    target,
-                    _OID_DOT1D_TP_FDB_PORT,
-                    index_len=6,
-                    host=switch_ip,
-                )
-
-                # Build MAC -> bridge_port from dot1dTpFdbPort
-                mac_to_bp: dict[str, int] = {}
-                for idx, val in fdb_port_rows:
-                    mac = ":".join(f"{o:02x}" for o in idx)
-                    mac_to_bp[mac] = int(val)
-
-                logger.info(f"  {switch_ip}: {len(mac_to_bp)} MAC entries via BRIDGE-MIB")
-
-                for mac, bridge_port in mac_to_bp.items():
-                    if bridge_port == 0:
-                        continue
-                    if_index = bridge_port_to_if.get(bridge_port, bridge_port)
-                    pname = port_names.get(if_index, f"port{if_index}")
-                    result[mac] = SwitchPortMapping(
-                        switch_ip=switch_ip,
-                        switch_name=sys_name,
-                        port_index=if_index,
-                        port_name=pname,
-                    )
-
             logger.info(f"  {switch_ip} ({sys_name}): {len(result)} MAC->port mappings")
+        except SnmpError as e:
+            logger.error(describe_snmp_error(e, switch_ip, creds))
         except Exception as e:
             logger.error(f"SNMP query failed for {switch_ip}: {e}")
-        finally:
-            engine.close_dispatcher()
 
         return result
 

@@ -1,9 +1,12 @@
 """Tests for networkmgmt/discovery/snmp.py"""
 
+import asyncio
+
 import pytest
 
 from networkmgmt.discovery.models import DiscoveredHost, SwitchPortMapping
-from networkmgmt.discovery.snmp import _build_port_name_map, SnmpBridgeDiscovery
+from networkmgmt.discovery.snmp import SnmpBridgeDiscovery, _build_port_name_map
+from networkmgmt.snmp import SnmpAuthenticationError, SnmpCredentials, SnmpTimeoutError
 
 
 class TestBuildPortNameMap:
@@ -236,3 +239,120 @@ class TestBuildL2Topology:
         l2_entries, topology_tree = SnmpBridgeDiscovery.build_l2_topology(hosts, mac_table, switch_ips)
 
         assert len(l2_entries) == 0
+
+
+def _query(discovery, ip, credentials):
+    return asyncio.run(discovery._query_switch(ip, credentials))
+
+
+class FakeSession:
+    """Stands in for AsyncSnmpSession in SnmpBridgeDiscovery._query_switch."""
+
+    tables: dict = {}
+    error: Exception | None = None
+    created: list = []
+
+    def __init__(self, host, credentials, **kwargs):
+        FakeSession.created.append((host, credentials, kwargs))
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def get(self, oid):
+        if FakeSession.error:
+            raise FakeSession.error
+        return "sw1"
+
+    async def _walk(self, base):
+        return dict(FakeSession.tables.get(base, {}))
+
+    walk = walk_int = _walk
+
+
+@pytest.fixture
+def fake_session(monkeypatch):
+    from networkmgmt.discovery import snmp as snmp_mod
+
+    FakeSession.error = None
+    FakeSession.created = []
+    FakeSession.tables = {
+        snmp_mod._OID_IF_DESCR: {"5": "unit 1 port 5 Gigabit - Level"},
+        snmp_mod._OID_DOT1D_BASE_PORT_IF_INDEX: {"5": 5},
+    }
+    monkeypatch.setattr(snmp_mod, "AsyncSnmpSession", FakeSession)
+    return FakeSession
+
+
+class TestQuerySwitch:
+    def test_qbridge_suffix_keys(self, fake_session):
+        from networkmgmt.discovery import snmp as snmp_mod
+
+        fake_session.tables[snmp_mod._OID_DOT1Q_TP_FDB_PORT] = {"10.0.17.34.51.68.85": 5, "20.0.17.34.51.68.85": 5}
+
+        result = _query(SnmpBridgeDiscovery([]), "10.0.0.1", "public")
+
+        assert list(result) == ["00:11:22:33:44:55"]
+        assert result["00:11:22:33:44:55"].port_name == "U1/g5"
+        assert result["00:11:22:33:44:55"].switch_name == "sw1"
+
+    def test_bridge_mib_fallback(self, fake_session):
+        from networkmgmt.discovery import snmp as snmp_mod
+
+        fake_session.tables[snmp_mod._OID_DOT1D_TP_FDB_PORT] = {"0.17.34.51.68.85": 5, "0.0.0.0.0.1": 0}
+
+        result = _query(SnmpBridgeDiscovery([]), "10.0.0.1", "public")
+
+        assert list(result) == ["00:11:22:33:44:55"]
+
+    def test_v3_credentials_reach_session(self, fake_session):
+        creds = SnmpCredentials.v3("admin", "authkey12", priv_key="privkey12")
+
+        _query(SnmpBridgeDiscovery([], timeout=2.0, retries=0), "10.0.0.1", creds)
+
+        host, used, kwargs = fake_session.created[0]
+        assert used is creds
+        assert kwargs == {"timeout": 2.0, "retries": 0}
+
+    def test_string_means_v2c(self, fake_session):
+        _query(SnmpBridgeDiscovery([]), "10.0.0.1", "private")
+
+        assert fake_session.created[0][1] == SnmpCredentials.v2c("private")
+
+    def test_auth_failure_logged_not_silent(self, fake_session):
+        from loguru import logger
+
+        fake_session.error = SnmpAuthenticationError("WrongDigest")
+        messages: list[str] = []
+        logger.enable("networkmgmt")
+        sink = logger.add(messages.append, level="ERROR", format="{message}")
+        try:
+            result = _query(SnmpBridgeDiscovery([]), "10.0.0.1", SnmpCredentials.v3("admin", "authkey12"))
+        finally:
+            logger.remove(sink)
+            logger.disable("networkmgmt")
+
+        assert result == {}
+        assert any("authentication failed" in m and "admin" in m for m in messages)
+        assert not any("authkey12" in m for m in messages)
+
+    def test_discover_mixed_switches(self, fake_session):
+        from networkmgmt.discovery import snmp as snmp_mod
+
+        fake_session.tables[snmp_mod._OID_DOT1D_TP_FDB_PORT] = {"0.17.34.51.68.85": 5}
+        creds = SnmpCredentials.v3("admin", "authkey12")
+
+        merged = SnmpBridgeDiscovery([("10.0.0.1", "public"), ("10.0.0.2", creds)]).discover()
+
+        assert len(merged["00:11:22:33:44:55"]) == 2
+        assert [c for _, c, _ in fake_session.created] == [SnmpCredentials.v2c("public"), creds]
+
+
+def test_describe_snmp_error_v3_timeout():
+    from networkmgmt.discovery.snmp import describe_snmp_error
+
+    msg = describe_snmp_error(SnmpTimeoutError("t"), "h", SnmpCredentials.v3("admin", "authkey12"))
+
+    assert "SNMPv3 user 'admin'" in msg
