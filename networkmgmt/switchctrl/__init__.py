@@ -1,7 +1,6 @@
 """Switch control — multi-vendor switch management via REST / SSH / CLI."""
 
 import networkmgmt.switchctrl.vendors  # noqa: F401  # trigger vendor registration
-
 from networkmgmt.switchctrl.base.client import BaseSwitchClient
 from networkmgmt.switchctrl.base.transport import BaseTransport
 from networkmgmt.switchctrl.exceptions import (

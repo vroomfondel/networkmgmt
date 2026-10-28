@@ -13,13 +13,13 @@ from networkmgmt.switchctrl.base.managers import (
     BaseVLANManager,
 )
 from networkmgmt.switchctrl.factory import register_vendor
-from networkmgmt.switchctrl.vendors.common.cisco_cli import CiscoCLITransport
 from networkmgmt.switchctrl.vendors.cisco.managers import (
     CiscoCatalystLACPManager,
     CiscoCatalystPortManager,
     CiscoCatalystVLANManager,
     CiscoCLIMonitoringManager,
 )
+from networkmgmt.switchctrl.vendors.common.cisco_cli import CiscoCLITransport
 
 logger = logging.getLogger(__name__)
 

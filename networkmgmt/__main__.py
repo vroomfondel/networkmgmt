@@ -11,7 +11,7 @@ Examples:
 
   networkmgmt discover -i eth0 --nmap -o topology.md
 
-  networkmgmt vlan-dump 192.168.101.38 public --markdown
+  networkmgmt vlan-dump 192.0.2.38 public --markdown
 """
 
 from __future__ import annotations
@@ -21,8 +21,7 @@ import sys
 
 from tabulate import tabulate
 
-from networkmgmt import __version__, configure_logging
-from networkmgmt import glogger
+from networkmgmt import __version__, configure_logging, glogger
 
 COMMANDS = {
     "switchctrl": ("networkmgmt.switchctrl.cli", "Multi-vendor switch management"),

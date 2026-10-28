@@ -114,7 +114,7 @@ class LldpDiscovery:
             return entries
 
         for json_file in json_files:
-            host_ip = json_file.stem  # e.g. "192.168.101.50"
+            host_ip = json_file.stem  # e.g. "192.0.2.50"
             host = ip_to_host.get(host_ip)
             if host is None:
                 logger.debug(f"LLDP: {json_file.name}: host {host_ip} not in discovered hosts, skipping")
