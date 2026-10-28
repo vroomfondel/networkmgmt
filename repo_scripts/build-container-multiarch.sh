@@ -125,7 +125,51 @@ platform_needs_vm() {
 copy_image_from_vm() {
   local image="$1"
   log "Copying image from VM to host: ${image}"
-  podman image scp "podman-machine-default::${image}"
+
+  # Transfer via `podman image save | podman image load` instead of
+  # `podman image scp` (brittle: needs a matching podman in $PATH on the VM
+  # side, no progress, silent failures). A streamed save->load only needs the
+  # local podman-machine connection.
+  #
+  # Drop any stale local copy first (`podman load` normalizes a short-name
+  # RepoTag to localhost/...), so clean all three possible forms.
+  podman image rm "${image}" 2>/dev/null || true
+  podman image rm "docker.io/${image}" 2>/dev/null || true
+  podman image rm "localhost/${image}" 2>/dev/null || true
+
+  # Image size (from the VM store) feeds pv's -s so it can show percent + ETA.
+  local size
+  size=$(podman --connection podman-machine-default image inspect \
+          --format '{{.Size}}' "${image}" 2>/dev/null || echo "")
+  if [[ -n "${size}" ]] && command -v numfmt >/dev/null 2>&1; then
+    echo "Transfer target: $(numfmt --to=iec --suffix=B "${size}") (${size} bytes)"
+  elif [[ -n "${size}" ]]; then
+    echo "Transfer target: ${size} bytes"
+  fi
+
+  if command -v pv >/dev/null 2>&1; then
+    local -a pv_args=(-ptebar)
+    [[ -n "${size}" ]] && pv_args+=(-s "${size}")
+    set -o pipefail
+    podman --connection podman-machine-default image save --format oci-archive "${image}" \
+      | pv "${pv_args[@]}" \
+      | podman image load \
+      || die "streamed image transfer of ${image} failed"
+  else
+    set -o pipefail
+    podman --connection podman-machine-default image save --format oci-archive "${image}" \
+      | podman image load \
+      || die "streamed image transfer of ${image} failed"
+  fi
+
+  # `podman load` strips the registry component and re-normalizes a short name
+  # to localhost/...; retag so the reference the manifest step uses resolves.
+  if podman image exists "localhost/${image}"; then
+    podman tag "localhost/${image}" "${image}"
+  fi
+
+  podman image inspect "${image}" >/dev/null \
+    || die "Image ${image} not present locally after transfer"
 }
 
 #=============================================================================
