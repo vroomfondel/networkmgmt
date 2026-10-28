@@ -65,6 +65,42 @@ def build_port_map(
     return port_map, unit_info
 
 
+_FRONT_IFNAME_RE = re.compile(r"^(\d+)/(x?g)(\d+)$")
+_FRONT_IFDESCR_RE = re.compile(r"^(?:unit|Slot:)\s*\d+\s+(?:port|Port:)\s*\d+\s", re.IGNORECASE)
+
+
+def classify_port(if_name: str, if_descr: str, is_bridge_port: bool | None) -> str:
+    """Classify an interface as ``front``, ``stack``, ``lag``, ``cpu`` or ``other``.
+
+    Args:
+        if_name: ifName (``1/g3``, ``2/xg27``, ``l1``, ``cpu``); may be empty.
+        if_descr: ifDescr; may be empty.
+        is_bridge_port: Whether dot1dBasePortIfIndex lists the interface; None when the switch
+            reports no bridge ports at all.
+
+    Returns:
+        ``front`` for bridge-attached front ports, ``stack`` for front-port-shaped interfaces that
+        are not bridge ports (S3300 stack links), otherwise the kind of the interface.
+    """
+    name = if_name.strip().lower()
+    descr = if_descr.strip()
+    if name == "cpu" or descr.lower().startswith("cpu"):
+        return "cpu"
+    if re.fullmatch(r"l\d+", name) or descr.lower().startswith("lag ") or descr.lower().endswith("link aggregate"):
+        return "lag"
+    if _FRONT_IFNAME_RE.match(name) or _FRONT_IFDESCR_RE.match(descr):
+        return "stack" if is_bridge_port is False else "front"
+    return "other"
+
+
+def ifname_to_descr(if_name: str) -> str | None:
+    """Return an ifDescr-style string for an ifName like ``2/xg27``, or None when it does not match."""
+    m = _FRONT_IFNAME_RE.match(if_name.strip().lower())
+    if not m:
+        return None
+    return f"unit {m.group(1)} port {m.group(3)} {'10G' if m.group(2) == 'xg' else 'Gigabit'} - Level"
+
+
 def status_str(s: int) -> str:
     """Convert SNMP ifOperStatus code to human-readable string."""
     return {1: "UP", 2: "down", 6: "n/a"}.get(s, f"?({s})")

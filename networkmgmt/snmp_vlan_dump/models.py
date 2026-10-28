@@ -41,3 +41,6 @@ class VlanDumpData(BaseModel):
     untagged_data: dict[int, bytes] = Field(default_factory=dict)
 
     all_phys: list[int] = Field(default_factory=list)
+
+    port_kind: dict[int, str] = Field(default_factory=dict)
+    stack_ports: list[int] = Field(default_factory=list)

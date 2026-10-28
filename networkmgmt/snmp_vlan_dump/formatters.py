@@ -56,6 +56,12 @@ class TerminalFormatter:
                 name = d.port_map.get(p, f"p{p}")
                 lines.append(f"{name:<10} {st:<6} {str(pv):>5}  {untag_str:<25} {tag_str}")
 
+            lines.append("PVID = VLAN assigned to untagged ingress frames")
+
+        if d.stack_ports:
+            stack = ", ".join(d.port_map.get(p, f"p{p}") for p in d.stack_ports)
+            lines.append(f"\nStack links (not bridge ports, omitted from VLAN tables): {stack}")
+
         # ── VLAN summary ──────────────────────────────────────────────
         lines.append(f"\n\n{'=' * 85}")
         lines.append("  VLAN-ZUSAMMENFASSUNG")
@@ -131,7 +137,11 @@ class MarkdownFormatter:
                 name = d.port_map.get(p, f"p{p}")
                 lines.append(f"| {name} | {st} | {pv} | {untag_str} | {tag_str} |")
 
-            lines.append("")
+            lines.append("\nPVID = VLAN assigned to untagged ingress frames.\n")
+
+        if d.stack_ports:
+            stack = ", ".join(d.port_map.get(p, f"p{p}") for p in d.stack_ports)
+            lines.append(f"Stack links (not bridge ports, omitted from VLAN tables): {stack}\n")
 
         # ── VLAN summary ──────────────────────────────────────────────
         lines.append("## VLAN Summary\n")
