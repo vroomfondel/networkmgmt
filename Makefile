@@ -98,10 +98,12 @@ pypipush: venv dist/.touchfile_push
 DOCKER_IMAGE := networkmgmt
 
 build:
+	repo_scripts/check_build_context.sh || exit 1
 	docker build -t $(DOCKER_IMAGE):latest .
 
 docker: venv
 	@$(venv_activated)
+	repo_scripts/check_build_context.sh || exit 1
 	docker build -t $(DOCKER_IMAGE):$(VERSION) -t $(DOCKER_IMAGE):latest .
 
 update-all-dockerhub-readmes:

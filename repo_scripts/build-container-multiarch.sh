@@ -333,6 +333,10 @@ build_local_only() {
 main() {
   setup_environment
 
+  if [[ "${1:-}" != login ]]; then
+    "${SCRIPT_DIR}/check_build_context.sh" || die "Build context check failed"
+  fi
+
   case "${1:-}" in
     login)
       ensure_docker_login

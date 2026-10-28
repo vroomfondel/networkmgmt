@@ -1,16 +1,10 @@
-__pycache__
-*.local.*
-.venv
-.git
-.github
-.idea
-.mypy_cache
-.pytest_cache
-dist
-*.egg-info
-/tests
-*.pyc
+# Allowlist: only what the Dockerfile COPYs. check_build_context.sh reads the !-entries.
+*
+!requirements.txt
+!README.md
+!pyproject.toml
+!networkmgmt
 
-docker-config/
 **/__pycache__
+**/*.py[co]
 **/*.local.*
